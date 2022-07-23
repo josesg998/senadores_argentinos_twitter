@@ -1,0 +1,332 @@
+---
+title: "Senadores Nacionales en Twitter"
+author: "José Saint Germain"
+date: "16/4/2021"
+output:  
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+# Introducción
+
+El objetivo de este trabajo es generar un análisis exploratorio sobre la actividad de los senadores nacionales de la República Argentina en la red social **Twitter**, registrar las variaciones que puedan tener entre ellos y controlarlo por variables accesorias como el género, la provincia por la que fueron electos y el interbloque al que pertenecen.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+options(scipen=9999)
+#Cargamos todas las librerías que utilizaremos
+library(tidyverse,warn.conflicts = F)
+library(ggplot2,warn.conflicts = F)
+library(ggthemes,warn.conflicts = F)
+library(plotly,warn.conflicts = F)
+library(RColorBrewer,warn.conflicts = F)
+library(tidytext,warn.conflicts = F)
+library(wordcloud2,warn.conflicts = F)
+library(wordcloud,warn.conflicts = F)
+library(tm,warn.conflicts = F)
+library(scales,warn.conflicts = F)
+library(rmdformats,warn.conflicts=F)
+```
+
+Para generar la base de datos con la que se trabajará fue necesario importar los tweets de los 62 senadores que tienen cuenta de Twitter mediante el paquete **rtweet**. Esta importación se realizó el 04/04/2021, por lo que la base de datos puede estar algo desactualizada.
+
+```{r Importar datos HCSN}
+#library(rtweet)
+#Tweets_HCSN <- data.frame(matrix(nrow=0,ncol=0))
+
+#Senadores <- c("anabelfsagasti","GugaLusto","estebanbullrich","marianorecalde","juliocobos","JorgeTaiana","gladys_gonzalez","mauricloss","JulioMartinezLR","alfredodeangeli","luisnaidenoff","SilviaEdePerez","CarlosMenem_LR","MatiasRodrigTDF","laurmachado","Weretilneck","EduardoCostaSC","claudiojpoggi","MarioFiad","OscarParrilli","SenadorLuenzo","espinolacamau","RomeroxSalta","nancysgonzalez","LupeTagliaferri","JAlperovichOk","sacnun","pilattivergara","PameVerasay","SchiavoniH","giacopposilvia","Juancmarino","dalmaciomera","adolfoRSquotes","Norma_Durango","AnaAlmironCtes","BeatrizMirkinOk","EdgardoKueider","guillermosnopek","RGBasualdo","juanmariopais","CaserioCarlos","SenadoraBlas","eugecatalfamo","mirabellarob","AnaMariaIanni","MaggieSolariQ","ReutemannC","PedroBraillardP","MariabTapia","LucilaCrexell","Oacastillo","Martinez_EF","VZimmermannOK","blancopabloda","ClaudiaLAZamora","Senadora_Olalla","DanielLoveraLP","sapag_silvia","AntonioRodas8","noragimenezok","JoseNederSDE")
+
+#for (i in Senadores){
+#  Base <- get_timeline(i,n=3000)
+#  
+#  Tweets_HCSN <- rbind(Tweets_HCSN,Base)
+#}
+#
+#save_as_csv(x = Tweets_HCSN,file_name = "Tweets_HCSN",fileEncoding = "UTF-8" )
+```
+
+Como generar esta función lleva mucho tiempo y se requiere estar logeado a una cuenta de Twitter, se accede a un CSV ya guardado.
+```{r}
+#Se importa el CSV
+Sen <- read_csv("Tweets_HCSN.csv")
+#Se remueve los retweets y nos quedamos solo con el usuario y el texto del tweet
+Sen <- Sen %>% 
+  filter(is_retweet==FALSE) %>% 
+  select(screen_name,text)%>% 
+  rename(Senador=screen_name,Tweet=text)
+
+head(Sen)
+```
+
+
+Aquí generamos dos funciones que utilizaremos recurrentemente:
+- `var_sen`: agrega variables sustantivas sobre los senadores: interbloque, Género, provincia y región
+- `limpiar_tokenizar`: filtra de forma general los regex de tweets (copiado de https://rpubs.com/Joaquin_AR/334526) 
+
+```{r echo=T}
+#Creamos una función que agrega datos sustantivos de los senadores (Partido, Género, provincia y región)
+var_sen <- function(data){
+  data %>% 
+    mutate(Género=case_when(
+      Senador%in%c("anabelfsagasti","gladys_gonzalez","SilviaEdePerez","laurmachado",
+                       "nancysgonzalez","LupeTagliaferri","sacnun","pilattivergara",
+                       "PameVerasay","giacopposilvia","Norma_Durango","AnaAlmironCtes",
+                       "BeatrizMirkinOk","SenadoraBlas","eugecatalfamo","AnaMariaIanni",
+                       "MaggieSolariQ","MariabTapia","LucilaCrexell","ClaudiaLAZamora",
+                       "Senadora_Olalla","sapag_silvia","noragimenezok")~"Mujer",
+      Senador%in%c("marianorecalde","JorgeTaiana","CarlosMenem_LR","MatiasRodrigTDF",
+                       "OscarParrilli","SenadorLuenzo","JAlperovichOk",
+                       "adolfoRSquotes","JoseNederSDE","CaserioCarlos","mirabellarob",
+                       "espinolacamau","guillermosnopek","dalmaciomera","EdgardoKueider",
+                       "juanmariopais","DanielLoveraLP","AntonioRodas8","GugaLusto",
+                       "estebanbullrich","juliocobos","JulioMartinezLR","alfredodeangeli",
+                       "luisnaidenoff","EduardoCostaSC","claudiojpoggi","SchiavoniH",
+                       "Juancmarino","RGBasualdo","blancopabloda","PedroBraillardP",
+                       "Oacastillo","VZimmermannOK","MarioFiad","Martinez_EF",
+                       "mauricloss","Weretilneck","RomeroxSalta","ReutemannC")~"Hombre"),
+      Partido=case_when(
+        Senador%in%c("anabelfsagasti","marianorecalde","JorgeTaiana","CarlosMenem_LR",
+                         "MatiasRodrigTDF","OscarParrilli","SenadorLuenzo",
+                         "JAlperovichOk","sacnun","adolfoRSquotes","Norma_Durango",
+                         "JoseNederSDE","BeatrizMirkinOk","AnaAlmironCtes","SenadoraBlas",
+                         "CaserioCarlos","mirabellarob","ClaudiaLAZamora","eugecatalfamo",
+                         "espinolacamau","noragimenezok","guillermosnopek",
+                         "pilattivergara","nancysgonzalez","dalmaciomera",
+                         "EdgardoKueider","juanmariopais","AnaMariaIanni",
+                         "DanielLoveraLP","sapag_silvia","AntonioRodas8")~"FdT",
+        Senador%in%c("gladys_gonzalez","GugaLusto","estebanbullrich","juliocobos","estebanbullrich",
+                         "JulioMartinezLR","alfredodeangeli","luisnaidenoff",
+                         "SilviaEdePerez","EduardoCostaSC","claudiojpoggi",
+                         "LupeTagliaferri","SchiavoniH","giacopposilvia","Juancmarino",
+                         "RGBasualdo","blancopabloda","PedroBraillardP","Oacastillo",
+                         "VZimmermannOK","PameVerasay","laurmachado","MarioFiad",
+                         "MariabTapia","Senadora_Olalla","Martinez_EF")~"JxC",
+        Senador%in%c("mauricloss","Weretilneck","RomeroxSalta","MaggieSolariQ",
+                         "ReutemannC","LucilaCrexell")~"otros"),
+      Provincia=case_when(
+        Senador%in%c("anabelfsagasti","juliocobos","PameVerasay")~"Mendoza",
+        Senador%in%c("marianorecalde","GugaLusto","LupeTagliaferri")~"CABA",
+        Senador%in%c("JorgeTaiana","gladys_gonzalez","estebanbullrich")~"Buenos Aires",
+        Senador%in%c("ReutemannC","sacnun","mirabellarob")~"Santa Fe",
+        Senador%in%c("alfredodeangeli","EdgardoKueider","Senadora_Olalla")~"Entre Ríos",
+        Senador%in%c("SenadoraBlas","Oacastillo","dalmaciomera")~"Catamarca",
+        Senador%in%c("pilattivergara","VZimmermannOK","AntonioRodas8")~"Chaco",
+        Senador%in%c("nancysgonzalez","SenadorLuenzo","juanmariopais")~"Chubut",
+        Senador%in%c("Martinez_EF","CaserioCarlos","laurmachado")~"Córdoba",
+        Senador%in%c("AnaAlmironCtes","PedroBraillardP","espinolacamau")~"Corrientes",
+        Senador%in%c("luisnaidenoff")~"Formosa",
+        Senador%in%c("MarioFiad","giacopposilvia","guillermosnopek")~"Jujuy",
+        Senador%in%c("Juancmarino","Norma_Durango","DanielLoveraLP")~"La Pampa",
+        Senador%in%c("CarlosMenem_LR","JulioMartinezLR")~"La Rioja",
+        Senador%in%c("mauricloss","MaggieSolariQ","SchiavoniH")~"Misiones",
+        Senador%in%c("LucilaCrexell","OscarParrilli","sapag_silvia")~"Neuquén",
+        Senador%in%c("Weretilneck")~"Río Negro",
+        Senador%in%c("noragimenezok","RomeroxSalta")~"Salta",
+        Senador%in%c("RGBasualdo")~"San Juan",
+        Senador%in%c("adolfoRSquotes","claudiojpoggi","eugecatalfamo")~"San Luis",
+        Senador%in%c("AnaMariaIanni","EduardoCostaSC","MariabTapia")~"Santa Cruz",
+        Senador%in%c("ClaudiaLAZamora","JoseNederSDE")~"Santiago del Estero",
+        Senador%in%c("blancopabloda","MatiasRodrigTDF")~"Tierra del Fuego",
+        Senador%in%c("SilviaEdePerez","JAlperovichOk","BeatrizMirkinOk")~"Tucumán")) %>% 
+    mutate(Región=case_when(Provincia%in%c("Mendoza","San Juan","San Luis")~"Cuyo",
+                            Provincia%in%c("Tierra del Fuego","Santa Cruz",
+                                           "Río Negro","Chubut","Neuquén")~"Patagonia",
+                            Provincia%in%c("CABA","Buenos Aires","Córdoba","Santa Fe",
+                                           "Entre Ríos","La Pampa")~"Pampeana",
+                            Provincia%in%c("Corrientes","Misiones","Formosa","Chaco")~"NEA",
+                            Provincia%in%c("Jujuy","Salta","Tucumán","Catamarca",
+                                           "La Rioja","Santiago del Estero")~"NOA"))
+}
+
+limpiar_tokenizar <- function(texto){
+  # El orden de la limpieza no es arbitrario
+  # Se convierte todo el texto a minúsculas
+  nuevo_texto <- tolower(texto)
+  # Eliminación de páginas web (palabras que empiezan por "http." seguidas 
+  # de cualquier cosa que no sea un espacio)
+  nuevo_texto <- str_replace_all(nuevo_texto,"http\\S*", "")
+  # Eliminación de signos de puntuación
+  nuevo_texto <- str_replace_all(nuevo_texto,"[[:punct:]]", " ")
+  # Eliminación de números
+  nuevo_texto <- str_replace_all(nuevo_texto,"[[:digit:]]", " ")
+  # Eliminación de espacios en blanco múltiples
+  nuevo_texto <- str_replace_all(nuevo_texto,"[\\s]+", " ")
+  # Tokenización por palabras individuales
+  nuevo_texto <- str_split(nuevo_texto, " ")[[1]]
+  # Eliminación de tokens con una longitud < 2
+  nuevo_texto <- keep(.x = nuevo_texto, .p = function(x){str_length(x) > 1})
+  return(nuevo_texto)
+}
+```
+
+# Análisis exploratorio
+
+## Número de tweets
+
+Ahora podemos comenzar a realizar algunos análisis exploratorios. Lo primero que vamos a medir es la cantidad de tweets producida por senador.
+```{r echo=T}
+#,fig.width=10, fig.height=20
+#Agrupamos la cantidad de tweets por usuario
+Sen_tw <- Sen %>% group_by(Senador) %>% summarise("Número de tweets" = n()) 
+
+Sen_tw <- var_sen(Sen_tw) %>% arrange(as.numeric(-`Número de tweets`))
+
+head(Sen_tw)
+```
+
+Graficamos los resultados
+```{r echo=T}
+g <- Sen_tw %>%arrange(-`Número de tweets`) %>% 
+  ggplot(aes(x=reorder(Senador,`Número de tweets`),y=`Número de tweets`,
+             fill=Género))+geom_bar(stat = "identity")+
+    labs(x=NULL,y=NULL,title="Cantidad de tweets por senador y género")+
+    scale_fill_viridis_d()+
+  theme(panel.background = element_rect(fill = "white"),axis.text.y = element_text(size=7))+
+    coord_flip()
+
+p <- Sen_tw %>%arrange(-`Número de tweets`) %>% 
+  ggplot(aes(x=reorder(Senador,`Número de tweets`),y=`Número de tweets`,
+             fill=Partido))+geom_bar(stat = "identity")+
+    labs(x=NULL,y=NULL,title="Cantidad de tweets por senador e interbloque")+
+    scale_fill_viridis_d()+
+  theme(panel.background = element_rect(fill = "white"),axis.text.y = element_text(size=7))+
+    coord_flip()
+
+r <- Sen_tw %>%arrange(-`Número de tweets`) %>% 
+  ggplot(aes(x=reorder(Senador,`Número de tweets`),y=`Número de tweets`,
+             fill=Región))+geom_bar(stat = "identity")+
+    labs(x=NULL,y=NULL,title="Cantidad de tweets por senador y región")+
+    scale_fill_viridis_d()+
+  theme(panel.background = element_rect(fill = "white"),axis.text.y = element_text(size=7))+
+    coord_flip()
+
+ggplotly(g)
+ggplotly(p)
+ggplotly(r)
+```
+
+## Vocabulario en los tweets
+
+Ahora vamos a intentar observar la cantidad de palabras distintas utilizadas en los tweets de los senadores.
+
+Para eso tenemos que tokenizar todos los tweets y agruparlos por senador:
+```{r echo=T}
+Sen_tok <- Sen %>% mutate(texto_tokenizado = map(.x = Tweet,.f = limpiar_tokenizar)) %>% select(-Tweet) %>% unnest() %>% rename(token = texto_tokenizado)
+
+Sen_tok <- var_sen(Sen_tok)
+```
+
+Graficamos:
+```{r echo=T}
+ggplotly(Sen_tok %>% distinct() %>% 
+  ggplot(aes(x = Senador,fill=Partido)) + geom_bar()+coord_flip()+labs(x=NULL,y=NULL)+
+    scale_fill_viridis_d()+
+    labs(title="Cantidad de palabras utilizadas por tweet",
+         subtitle="Diferenciado por interbloque")+
+    theme(panel.background = element_rect(fill = "white"),axis.text.y = element_text(size=7)))
+```
+
+## Palabras más utilizadas
+
+Ahora queremos revisar qué palabras se utilizaron con mayor frecuencia.
+
+Para eso tendremos que:
+- Tokenizar los tweets
+- Filtrar las stop words
+- Distinguir entre partidos o género según conveniencia
+
+Tomamos la base tokenizada y la filtramos por las stopwords y por algunos caracteres que no se pudieron filtrar con la fucnción de Regex:
+```{r echo=T, warning=FALSE}
+custom_stop_words <- tm::stopwords("spanish") %>% as.data.frame() %>% rename(token=".")
+filtro <- c("<u+","><u+","c>","fb>","c><u+fe","f>","><u+fe","f><u+","c><u+","d><u+")
+
+
+Sen_tok_tidy <- Sen_tok %>% anti_join(custom_stop_words) %>% filter(!(token %in% filtro))
+  
+Sen_tok_tidy_x_sen <- Sen_tok_tidy %>% group_by(Senador, token) %>% count(token) %>% group_by(Senador) %>%top_n(10, n) %>% arrange(Senador, desc(n))
+
+
+Sen_tok_tidy_x_sen <- var_sen(Sen_tok_tidy_x_sen)
+
+head(Sen_tok_tidy_x_sen)
+```
+
+Graficamos barras distinguiendo por género y por partido:
+```{r echo=T}
+Sen_tok_tidy_x_sen %>% group_by(Género, token) %>% count(token) %>% group_by(Género) %>%
+                top_n(20, n) %>% arrange(Género, desc(n)) %>%
+                ggplot(aes(x = reorder(token,n), y = n, fill = Género)) +
+                geom_col() +
+                theme_bw() +
+                labs(y = "", x = "",title="Palabras utilizadas por género") +
+                theme(legend.position = "none") +
+                coord_flip()+
+                facet_wrap(~Género,scales = "free", drop = TRUE)+
+  scale_fill_manual(values = c("dark green","black"))+
+  theme_minimal()
+
+Sen_tok_tidy_x_sen %>% group_by(Partido, token) %>% count(token) %>% group_by(Partido) %>%
+                top_n(10, n) %>% arrange(Partido, desc(n)) %>%
+                ggplot(aes(x = reorder(token,n), y = n, fill = Partido)) +
+                geom_col() +
+                theme_bw() +
+                labs(y = "", x = "",title="Palabras utilizadas por interbloque") +
+                theme(legend.position = "none") +
+                coord_flip()+
+                facet_wrap(~Partido,scales = "free", drop = TRUE)+
+  scale_fill_manual(values = c("blue","yellow","black"))+
+  theme_minimal()
+```
+
+## Workloud
+Generamos un workcloud con todos los tweets. Se intentó realizar workcloud diferenciado por interbloque o género en el mismo gráfico, pero la función que había encontrado online no tomaba palabras con tilde.
+```{r echo=T}
+#Creamos un wordcloud
+Sen_tok %>%
+  anti_join(custom_stop_words) %>%
+  filter(!(token %in% filtro)) %>% 
+  count(token, sort=T) %>%
+  with(wordcloud(token, n, max.words = 100, color = brewer.pal(8, "Dark2")))
+```
+
+# Correlación
+
+Ahora vamos a intentar observar qué palabras se usan más comunmente entre senadores de diferentes interbloques y de distinto género:
+
+## Correlación entre partidos
+
+```{r}
+
+tweets_spread <- Sen_tok_tidy %>% group_by(Partido, token) %>% count(token) %>%
+                 spread(key = Partido, value = n, fill = NA, drop = TRUE)
+
+tweets_spread <- tweets_spread %>% select(token,FdT,JxC)
+
+ggplot(tweets_spread, aes(FdT, JxC)) +
+      geom_jitter(alpha = 0.1, size = 2.5, width = 0.25, height = 0.25) +
+      geom_text(aes(label = token), check_overlap = TRUE, vjust = 1.5) +
+      scale_x_log10(labels = percent_format()) +
+      scale_y_log10(labels = percent_format()) +
+      geom_abline(color = "red") +
+      theme_bw()+ labs(title="Palabras usadas por senadores",subtitle="Frente de Todos y Juntos por el Cambio")+
+      theme(axis.text.x = element_blank(),
+            axis.text.y = element_blank())
+```
+
+## Correlación entre géneros
+
+```{r}
+tweets_spread_g <- Sen_tok_tidy %>% group_by(Género, token) %>% count(token) %>%
+                 spread(key = Género, value = n, fill = NA, drop = TRUE)
+
+ggplot(tweets_spread_g, aes(Mujer,Hombre)) +
+      geom_jitter(alpha = 0.1, size = 2.5, width = 0.25, height = 0.25) +
+      geom_text(aes(label = token), check_overlap = TRUE, vjust = 1.5) +
+      scale_x_log10(labels = percent_format()) +
+      scale_y_log10(labels = percent_format()) +
+      geom_abline(color = "red") +
+      labs(title="Palabras usadas por senadores",subtitle="Mujeres y Hombres")+
+      theme_bw()
+```
